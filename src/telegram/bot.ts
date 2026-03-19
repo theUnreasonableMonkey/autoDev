@@ -12,6 +12,9 @@ export function createBot(token: string): Bot {
 }
 
 export async function startBot(bot: Bot): Promise<void> {
+  // Validate token by calling getMe — throws if unauthorized
+  await bot.init();
+
   // Start long polling in the background
   bot.start({
     onStart: () => {
