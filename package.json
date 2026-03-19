@@ -34,6 +34,7 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@grammyjs/conversations": "^2.1.1",
     "@types/node": "^25.5.0",
+    "better-sqlite3": "^12.8.0",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
     "execa": "^9.6.1",
@@ -47,6 +48,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
     "eslint": "^10.0.3",
     "prettier": "^3.8.1",
     "tsx": "^4.21.0",
