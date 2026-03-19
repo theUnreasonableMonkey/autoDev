@@ -22,8 +22,9 @@ program
   .option("--dry-run", "Fetch and display issues without processing them")
   .action(async (options: { config: string; resume?: boolean; dryRun?: boolean }) => {
     try {
-      const config = loadConfig(options.config);
+      const { config, repoDir } = loadConfig(options.config);
       console.log(`Loaded config for repo: ${config.repo}`);
+      console.log(`Target directory: ${repoDir}`);
 
       // Dry-run mode
       if (options.dryRun) {

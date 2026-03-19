@@ -1,8 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { configSchema, type AutoDevConfig } from "./schema.js";
 import dotenv from "dotenv";
+
+export interface LoadedConfig {
+  config: AutoDevConfig;
+  repoDir: string; // Absolute path to the directory containing the config file (i.e. the target repo)
+}
 
 export interface AppSecrets {
   anthropicApiKey: string;
@@ -30,7 +35,7 @@ export function loadSecrets(): AppSecrets {
   };
 }
 
-export function loadConfig(configPath: string): AutoDevConfig {
+export function loadConfig(configPath: string): LoadedConfig {
   const resolvedPath = resolve(configPath);
 
   if (!existsSync(resolvedPath)) {
@@ -40,6 +45,7 @@ export function loadConfig(configPath: string): AutoDevConfig {
     );
   }
 
+  const repoDir = dirname(resolvedPath);
   const raw = readFileSync(resolvedPath, "utf-8");
 
   let parsed: unknown;
@@ -59,5 +65,5 @@ export function loadConfig(configPath: string): AutoDevConfig {
     throw new Error(`Invalid config:\n${issues}`);
   }
 
-  return result.data;
+  return { config: result.data, repoDir };
 }

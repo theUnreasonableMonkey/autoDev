@@ -27,11 +27,14 @@ export interface OrchestratorOptions {
   config: AutoDevConfig;
   secrets: AppSecrets;
   logger: Logger;
+  repoDir: string;
   resume?: boolean;
 }
 
 export async function runOrchestrator(options: OrchestratorOptions): Promise<void> {
-  const { config, secrets, logger } = options;
+  const { config, secrets, logger, repoDir } = options;
+
+  logger.info({ repoDir }, "Target repo directory");
 
   // Set up Telegram bot and bridge (graceful failure)
   let bot: ReturnType<typeof createBot> | null = null;
@@ -64,7 +67,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     config.issues.max_questions_per_issue,
   );
 
-  // Set up executor
+  // Set up executor — cwd is the target repo
   const executor = new ClaudeDevExecutor(config);
   executor.setQuestionHandler(questionHandler);
 
@@ -86,12 +89,13 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
         async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
           const { issue } = input;
           logger.info({ issue: issue.number, title: issue.title }, "Preparing issue");
-          await pullMain();
-          await verifyCleanWorkDir();
+          await pullMain(repoDir);
+          await verifyCleanWorkDir(repoDir);
           const branchName = await createBranch(
             config.git.branch_prefix,
             issue.number,
             issue.title,
+            repoDir,
           );
           logger.info({ branch: branchName }, "Branch created");
           return { branchName };
@@ -126,7 +130,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
           };
         }) => {
           logger.info({ issue: input.issue.number }, "Running code review...");
-          const diff = await getCurrentDiff();
+          const diff = await getCurrentDiff(repoDir);
           const result = await reviewer.review({
             issue: input.issue,
             diff,
@@ -174,7 +178,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
         async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
           const message = `feat: implement #${input.issue.number} — ${input.issue.title}`;
           logger.info({ issue: input.issue.number }, "Committing and pushing...");
-          await commitAndPush(message, input.config.git.commit_co_author);
+          await commitAndPush(message, input.config.git.commit_co_author, repoDir);
           logger.info({ issue: input.issue.number }, "Pushed to remote");
         },
       ),
@@ -253,7 +257,6 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
           "All issues processed",
         );
 
-        // Send summary via Telegram
         const summary = [
           "AutoDev Run Complete",
           "",
@@ -268,7 +271,6 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
           ),
         ].join("\n");
 
-        // Print summary to console too
         console.log("\n" + summary);
 
         if (bridge) {
