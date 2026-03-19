@@ -400,6 +400,21 @@ export function createWorkflowMachine(config: AutoDevConfig) {
       },
 
       escalating: {
+        entry: ({ context }) => {
+          console.error(
+            `[AutoDev] Escalating issue #${context.currentIssue?.number ?? "?"}: ${context.lastError}`,
+          );
+        },
+        after: {
+          // Auto-skip after 10 seconds if no human responds (covers no-Telegram case)
+          10000: {
+            target: "skippingIssue",
+            actions: assign({
+              lastError: ({ context }) =>
+                context.lastError ?? "Escalation timed out — no human response",
+            }),
+          },
+        },
         on: {
           HUMAN_PROCEED: { target: "committing" },
           HUMAN_SKIP: {
