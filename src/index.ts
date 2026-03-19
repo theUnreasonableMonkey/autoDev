@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { randomUUID } from "node:crypto";
-import { loadConfig } from "./config/loader.js";
+import { loadConfig, loadSecrets } from "./config/loader.js";
 import { fetchIssues } from "./github/issues.js";
-import { createWorkflowMachine } from "./machine/workflow.js";
-import { persistSnapshot, loadSnapshot, hasSnapshot, clearSnapshot } from "./machine/persistence.js";
-import { createActor } from "xstate";
+import { hasSnapshot, loadSnapshot, clearSnapshot } from "./machine/persistence.js";
+import { runOrchestrator } from "./orchestrator.js";
+import { createSimpleLogger } from "./utils/logger.js";
 
 const program = new Command();
 
@@ -23,11 +22,10 @@ program
   .option("--dry-run", "Fetch and display issues without processing them")
   .action(async (options: { config: string; resume?: boolean; dryRun?: boolean }) => {
     try {
-      // Load and validate config
       const config = loadConfig(options.config);
       console.log(`Loaded config for repo: ${config.repo}`);
 
-      // Dry-run mode: fetch and display issues, then exit
+      // Dry-run mode
       if (options.dryRun) {
         console.log("\n--- DRY RUN ---\n");
         console.log("Fetching issues...");
@@ -52,62 +50,16 @@ program
         return;
       }
 
-      // Resume mode: restore state from disk
-      const runId = randomUUID().slice(0, 8);
-      const machine = createWorkflowMachine(config);
+      // Load secrets for full run
+      const secrets = loadSecrets();
+      const logger = createSimpleLogger();
 
-      if (options.resume) {
-        const snapshot = loadSnapshot();
-        if (!snapshot) {
-          console.error("No saved state found. Run without --resume to start fresh.");
-          process.exit(1);
-        }
-        console.log("Resuming from saved state...");
-        const actor = createActor(machine, { snapshot });
-
-        // Persist on every state change
-        actor.subscribe(() => {
-          const persisted = actor.getPersistedSnapshot();
-          persistSnapshot(persisted);
-        });
-
-        actor.start();
-        console.log(`Resumed. Current state: ${JSON.stringify(actor.getSnapshot().value)}`);
-
-        // TODO: In later phases, this will block until the machine reaches 'complete'
-        // For now, we just show the state
-        return;
-      }
-
-      // Normal start
-      console.log(`Starting run ${runId}...`);
-      const actor = createActor(machine);
-
-      // Persist on every state change
-      actor.subscribe(() => {
-        const persisted = actor.getPersistedSnapshot();
-        persistSnapshot(persisted);
+      await runOrchestrator({
+        config,
+        secrets,
+        logger,
+        resume: options.resume,
       });
-
-      // Graceful shutdown
-      const shutdown = () => {
-        console.log("\nShutdown requested. Persisting state...");
-        const persisted = actor.getPersistedSnapshot();
-        persistSnapshot(persisted);
-        console.log("State saved. Run with --resume to continue.");
-        process.exit(0);
-      };
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
-
-      actor.start();
-      actor.send({ type: "START" });
-
-      console.log(`State: ${JSON.stringify(actor.getSnapshot().value)}`);
-      console.log(
-        "\nNote: Full execution loop not yet wired. " +
-          "The state machine is running with stub actors.",
-      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Error: ${message}`);
