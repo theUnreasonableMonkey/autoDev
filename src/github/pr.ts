@@ -44,5 +44,18 @@ export async function createPullRequest(
 
   // Extract URL if mixed with other output
   const urlMatch = prUrl.match(/https:\/\/github\.com\/[^\s]+/);
-  return urlMatch ? urlMatch[0] : prUrl;
+  const url = urlMatch ? urlMatch[0] : prUrl;
+
+  // Auto-merge the PR and delete the branch
+  await execa("gh", [
+    "pr",
+    "merge",
+    url,
+    "--repo",
+    config.repo,
+    "--squash",
+    "--delete-branch",
+  ]);
+
+  return url;
 }
