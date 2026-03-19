@@ -59,6 +59,7 @@ program
         config,
         secrets,
         logger,
+        repoDir,
         resume: options.resume,
       });
     } catch (err) {

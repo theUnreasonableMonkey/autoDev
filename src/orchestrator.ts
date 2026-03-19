@@ -68,7 +68,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
   );
 
   // Set up executor — cwd is the target repo
-  const executor = new ClaudeDevExecutor(config);
+  const executor = new ClaudeDevExecutor(config, repoDir);
   executor.setQuestionHandler(questionHandler);
 
   // Create reviewer

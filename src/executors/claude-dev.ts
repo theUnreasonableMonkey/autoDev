@@ -4,9 +4,11 @@ import type { AutoDevConfig } from "../config/schema.js";
 export class ClaudeDevExecutor implements DevExecutor {
   private questionHandler: QuestionHandler | null = null;
   private config: AutoDevConfig;
+  private repoDir: string;
 
-  constructor(config: AutoDevConfig) {
+  constructor(config: AutoDevConfig, repoDir: string) {
     this.config = config;
+    this.repoDir = repoDir;
   }
 
   setQuestionHandler(handler: QuestionHandler): void {
@@ -22,7 +24,7 @@ export class ClaudeDevExecutor implements DevExecutor {
 
     const options: Record<string, unknown> = {
       allowedTools: this.config.executor.allowed_tools,
-      cwd: this.config.executor.working_directory,
+      cwd: this.repoDir,
       permissionMode: "bypassPermissions",
     };
 
