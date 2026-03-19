@@ -1,7 +1,7 @@
 ---
 title: "feat: AutoDev — Automated Development Orchestrator"
 type: feat
-status: active
+status: completed
 date: 2026-03-19
 origin: docs/brainstorms/2026-03-19-autodev-orchestrator-brainstorm.md
 ---
