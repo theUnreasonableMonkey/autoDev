@@ -28,6 +28,8 @@ export async function createPullRequest(
     "create",
     "--repo",
     config.repo,
+    "--base",
+    "main",
     "--title",
     title,
     "--body",
