@@ -1,16 +1,25 @@
-import { createActor } from "xstate";
+import { createActor, fromPromise } from "xstate";
 import type { AutoDevConfig } from "./config/schema.js";
 import type { AppSecrets } from "./config/loader.js";
 import { createWorkflowMachine } from "./machine/workflow.js";
 import { persistSnapshot, loadSnapshot } from "./machine/persistence.js";
 import { fetchIssues } from "./github/issues.js";
-import { pullMain, createBranch, verifyCleanWorkDir } from "./github/git-ops.js";
+import {
+  pullMain,
+  createBranch,
+  verifyCleanWorkDir,
+  commitAndPush,
+  getCurrentDiff,
+} from "./github/git-ops.js";
+import { createPullRequest } from "./github/pr.js";
 import { ClaudeDevExecutor } from "./executors/claude-dev.js";
 import { ClaudeReviewer } from "./executors/claude-reviewer.js";
 import { CodexReviewer } from "./executors/codex-reviewer.js";
 import { ThreeTierQuestionHandler } from "./questions/handler.js";
 import { createBot, startBot, stopBot } from "./telegram/bot.js";
 import { TelegramBridge } from "./telegram/bridge.js";
+import type { GitHubIssue, ReviewResult } from "./machine/context.js";
+import type { Reviewer } from "./executors/types.js";
 import type { Snapshot } from "xstate";
 import type { Logger } from "pino";
 
@@ -59,34 +68,133 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
   const executor = new ClaudeDevExecutor(config);
   executor.setQuestionHandler(questionHandler);
 
-  // Create reviewer (used by the state machine actors)
-  const reviewer =
+  // Create reviewer
+  const reviewer: Reviewer =
     config.reviewer.type === "codex" ? new CodexReviewer() : new ClaudeReviewer();
-  // Reviewer reference kept for state machine actor wiring
-  void reviewer;
 
-  // Create the state machine with real actors
+  // Create the state machine with real actors via fromPromise
   const machine = createWorkflowMachine(config).provide({
     actors: {
-      fetchIssues: {
-        // @ts-expect-error -- XState actor override
-        invoke: async () => {
-          logger.info("Fetching issues from GitHub...");
-          return fetchIssues(config);
-        },
-      },
-      prepareIssue: {
-        // @ts-expect-error -- XState actor override
-        invoke: async ({ input }: { input: { issue: { number: number; title: string } } }) => {
+      fetchIssues: fromPromise(async () => {
+        logger.info("Fetching issues from GitHub...");
+        const issues = await fetchIssues(config);
+        logger.info(`Found ${issues.length} issue(s)`);
+        return issues;
+      }),
+
+      prepareIssue: fromPromise(
+        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
           const { issue } = input;
-          logger.info({ issue: issue.number }, "Preparing issue");
+          logger.info({ issue: issue.number, title: issue.title }, "Preparing issue");
           await pullMain();
           await verifyCleanWorkDir();
-          const branchName = await createBranch(config.git.branch_prefix, issue.number, issue.title);
+          const branchName = await createBranch(
+            config.git.branch_prefix,
+            issue.number,
+            issue.title,
+          );
           logger.info({ branch: branchName }, "Branch created");
           return { branchName };
         },
-      },
+      ),
+
+      workOnIssue: fromPromise(
+        async ({
+          input,
+        }: {
+          input: { issue: GitHubIssue; config: AutoDevConfig; sessionId: string | null };
+        }) => {
+          logger.info({ issue: input.issue.number }, "Working on issue...");
+          const result = await executor.execute({
+            issue: input.issue,
+            config: input.config,
+            sessionId: input.sessionId,
+          });
+          logger.info({ issue: input.issue.number, sessionId: result.sessionId }, "Work complete");
+          return result;
+        },
+      ),
+
+      reviewCode: fromPromise(
+        async ({
+          input,
+        }: {
+          input: {
+            issue: GitHubIssue;
+            config: AutoDevConfig;
+            previousFindings: ReviewResult["findings"];
+          };
+        }) => {
+          logger.info({ issue: input.issue.number }, "Running code review...");
+          const diff = await getCurrentDiff();
+          const result = await reviewer.review({
+            issue: input.issue,
+            diff,
+            previousFindings: input.previousFindings,
+            iterationNumber: input.previousFindings.length > 0 ? 2 : 1,
+          });
+          const p1Count = result.findings.filter((f) => f.severity === "P1").length;
+          const p2Count = result.findings.filter((f) => f.severity === "P2").length;
+          logger.info(
+            { issue: input.issue.number, p1: p1Count, p2: p2Count, total: result.findings.length },
+            "Review complete",
+          );
+          return result;
+        },
+      ),
+
+      fixIssues: fromPromise(
+        async ({
+          input,
+        }: {
+          input: {
+            issue: GitHubIssue;
+            findings: ReviewResult["findings"];
+            sessionId: string;
+            config: AutoDevConfig;
+          };
+        }) => {
+          const findingsText = input.findings
+            .map((f) => `[${f.severity}] ${f.file}: ${f.description}`)
+            .join("\n");
+          logger.info({ issue: input.issue.number }, "Fixing review findings...");
+          await executor.execute({
+            issue: {
+              ...input.issue,
+              body: `Fix these review findings:\n${findingsText}\n\nComplete the P1 and P2 fixes and triage any remaining issues.`,
+            },
+            config: input.config,
+            sessionId: input.sessionId,
+          });
+          logger.info({ issue: input.issue.number }, "Fixes applied");
+        },
+      ),
+
+      commitAndPush: fromPromise(
+        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
+          const message = `feat: implement #${input.issue.number} — ${input.issue.title}`;
+          logger.info({ issue: input.issue.number }, "Committing and pushing...");
+          await commitAndPush(message, input.config.git.commit_co_author);
+          logger.info({ issue: input.issue.number }, "Pushed to remote");
+        },
+      ),
+
+      createPr: fromPromise(
+        async ({
+          input,
+        }: {
+          input: {
+            issue: GitHubIssue;
+            config: AutoDevConfig;
+            reviewFindings: ReviewResult["findings"];
+          };
+        }) => {
+          logger.info({ issue: input.issue.number }, "Creating PR...");
+          const prUrl = await createPullRequest(input.issue, input.config, input.reviewFindings);
+          logger.info({ issue: input.issue.number, prUrl }, "PR created");
+          return { prUrl };
+        },
+      ),
     },
   });
 
@@ -105,10 +213,10 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     actor = createActor(machine);
   }
 
-  // Persist on every state change
+  // Persist on every state change and log transitions
   actor.subscribe((snapshot) => {
     persistSnapshot(snapshot as unknown as Snapshot<unknown>);
-    logger.debug({ state: snapshot.value }, "State transition");
+    logger.info({ state: snapshot.value }, "State transition");
   });
 
   // Graceful shutdown
@@ -124,14 +232,14 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  // Wait for completion
+  // Start the machine
   actor.start();
 
   if (!options.resume) {
     actor.send({ type: "START" });
   }
 
-  // Subscribe to final state
+  // Wait for completion
   return new Promise<void>((resolve) => {
     actor.subscribe((snapshot) => {
       if (snapshot.status === "done") {
@@ -147,18 +255,21 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
 
         // Send summary via Telegram
         const summary = [
-          "✅ *AutoDev Run Complete*",
+          "AutoDev Run Complete",
           "",
           `Completed: ${ctx.completedIssues.length} issue(s)`,
           ...ctx.completedIssues.map(
-            (i) => `  • #${i.number} — ${i.title} → [PR](${i.prUrl})`,
+            (i) => `  - #${i.number} — ${i.title} → ${i.prUrl}`,
           ),
           "",
           `Skipped: ${ctx.skippedIssues.length} issue(s)`,
           ...ctx.skippedIssues.map(
-            (i) => `  • #${i.number} — ${i.title} (${i.reason})`,
+            (i) => `  - #${i.number} — ${i.title} (${i.reason})`,
           ),
         ].join("\n");
+
+        // Print summary to console too
+        console.log("\n" + summary);
 
         if (bridge) {
           bridge
