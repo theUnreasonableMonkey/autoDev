@@ -8,49 +8,54 @@ function slugify(text: string): string {
     .slice(0, 40);
 }
 
-export async function pullMain(): Promise<void> {
-  await execa("git", ["checkout", "main"]);
-  await execa("git", ["pull", "origin", "main"]);
+function git(args: string[], cwd: string) {
+  return execa("git", args, { cwd });
+}
+
+export async function pullMain(cwd: string): Promise<void> {
+  await git(["checkout", "main"], cwd);
+  await git(["pull", "origin", "main"], cwd);
 }
 
 export async function createBranch(
   prefix: string,
   issueNumber: number,
   title: string,
+  cwd: string,
 ): Promise<string> {
   const slug = slugify(title);
   const branchName = `${prefix}/${issueNumber}-${slug}`;
 
   // Check if branch already exists
   try {
-    await execa("git", ["rev-parse", "--verify", branchName]);
+    await git(["rev-parse", "--verify", branchName], cwd);
     // Branch exists — check out and reuse it
-    await execa("git", ["checkout", branchName]);
+    await git(["checkout", branchName], cwd);
     return branchName;
   } catch {
     // Branch doesn't exist — create it
-    await execa("git", ["checkout", "-b", branchName]);
+    await git(["checkout", "-b", branchName], cwd);
     return branchName;
   }
 }
 
-export async function verifyCleanWorkDir(): Promise<void> {
-  const { stdout } = await execa("git", ["status", "--porcelain"]);
+export async function verifyCleanWorkDir(cwd: string): Promise<void> {
+  const { stdout } = await git(["status", "--porcelain"], cwd);
   if (stdout.trim().length > 0) {
-    // Stash dirty changes with a descriptive message
-    await execa("git", ["stash", "push", "-m", "autodev: stashed dirty working directory"]);
+    await git(["stash", "push", "-m", "autodev: stashed dirty working directory"], cwd);
   }
 }
 
 export async function commitAndPush(
   message: string,
   coAuthor: string,
+  cwd: string,
 ): Promise<void> {
-  await execa("git", ["add", "-A"]);
+  await git(["add", "-A"], cwd);
 
   // Check if there are staged changes
   try {
-    await execa("git", ["diff", "--cached", "--quiet"]);
+    await git(["diff", "--cached", "--quiet"], cwd);
     // No changes to commit
     return;
   } catch {
@@ -58,16 +63,16 @@ export async function commitAndPush(
   }
 
   const fullMessage = `${message}\n\nCo-Authored-By: ${coAuthor}`;
-  await execa("git", ["commit", "-m", fullMessage]);
-  await execa("git", ["push", "-u", "origin", "HEAD"]);
+  await git(["commit", "-m", fullMessage], cwd);
+  await git(["push", "-u", "origin", "HEAD"], cwd);
 }
 
-export async function getCurrentDiff(): Promise<string> {
-  const { stdout } = await execa("git", ["diff", "main...HEAD"]);
+export async function getCurrentDiff(cwd: string): Promise<string> {
+  const { stdout } = await git(["diff", "main...HEAD"], cwd);
   return stdout;
 }
 
-export async function getCurrentBranch(): Promise<string> {
-  const { stdout } = await execa("git", ["branch", "--show-current"]);
+export async function getCurrentBranch(cwd: string): Promise<string> {
+  const { stdout } = await git(["branch", "--show-current"], cwd);
   return stdout.trim();
 }
