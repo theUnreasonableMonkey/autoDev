@@ -24,15 +24,28 @@ export interface OrchestratorOptions {
 export async function runOrchestrator(options: OrchestratorOptions): Promise<void> {
   const { config, secrets, logger } = options;
 
-  // Set up Telegram bot and bridge
-  const bot = createBot(secrets.telegramBotToken);
-  const bridge = new TelegramBridge(
-    bot,
-    config.telegram.chat_id,
-    config.telegram.escalation_timeout_minutes,
-    config.telegram.reminder_interval_minutes,
-  );
-  await startBot(bot);
+  // Set up Telegram bot and bridge (graceful failure)
+  let bot: ReturnType<typeof createBot> | null = null;
+  let bridge: TelegramBridge | null = null;
+
+  try {
+    if (!secrets.telegramBotToken) throw new Error("No bot token configured");
+    bot = createBot(secrets.telegramBotToken);
+    bridge = new TelegramBridge(
+      bot,
+      config.telegram.chat_id,
+      config.telegram.escalation_timeout_minutes,
+      config.telegram.reminder_interval_minutes,
+    );
+    await startBot(bot);
+    logger.info("Telegram bot connected");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Telegram bot failed to start: ${msg}`);
+    logger.warn("Continuing without Telegram — Tier 3 escalation disabled");
+    bot = null;
+    bridge = null;
+  }
 
   // Set up question handler
   const questionHandler = new ThreeTierQuestionHandler(
@@ -103,8 +116,8 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     logger.info("Shutdown requested");
     const persisted = actor.getPersistedSnapshot();
     persistSnapshot(persisted as unknown as Snapshot<unknown>);
-    bridge.cleanup();
-    stopBot(bot);
+    if (bridge) bridge.cleanup();
+    if (bot) stopBot(bot);
     logger.info("State saved. Run with --resume to continue.");
     process.exit(0);
   };
@@ -147,12 +160,13 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
           ),
         ].join("\n");
 
-        bridge
-          .notify(summary)
-          .catch(() => logger.warn("Failed to send completion summary to Telegram"));
-
-        bridge.cleanup();
-        stopBot(bot);
+        if (bridge) {
+          bridge
+            .notify(summary)
+            .catch(() => logger.warn("Failed to send completion summary to Telegram"));
+          bridge.cleanup();
+        }
+        if (bot) stopBot(bot);
         resolve();
       }
     });

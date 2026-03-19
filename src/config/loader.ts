@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 export interface AppSecrets {
   anthropicApiKey: string;
   openaiApiKey?: string;
-  telegramBotToken: string;
+  telegramBotToken?: string;
 }
 
 export function loadSecrets(): AppSecrets {
@@ -20,7 +20,7 @@ export function loadSecrets(): AppSecrets {
 
   const telegramBotToken = process.env["TELEGRAM_BOT_TOKEN"];
   if (!telegramBotToken) {
-    throw new Error("TELEGRAM_BOT_TOKEN environment variable is required");
+    console.warn("Warning: TELEGRAM_BOT_TOKEN not set — Telegram escalation disabled");
   }
 
   return {
