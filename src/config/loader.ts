@@ -10,7 +10,7 @@ export interface LoadedConfig {
 }
 
 export interface AppSecrets {
-  anthropicApiKey: string;
+  anthropicApiKey?: string;
   openaiApiKey?: string;
   telegramBotToken?: string;
 }
@@ -20,7 +20,7 @@ export function loadSecrets(): AppSecrets {
 
   const anthropicApiKey = process.env["ANTHROPIC_API_KEY"];
   if (!anthropicApiKey) {
-    throw new Error("ANTHROPIC_API_KEY environment variable is required");
+    console.log("No ANTHROPIC_API_KEY set — using Claude CLI OAuth (Max Pro subscription)");
   }
 
   const telegramBotToken = process.env["TELEGRAM_BOT_TOKEN"];
