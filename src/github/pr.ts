@@ -5,6 +5,7 @@ import type { AutoDevConfig } from "../config/schema.js";
 export async function createPullRequest(
   issue: GitHubIssue,
   config: AutoDevConfig,
+  cwd: string,
 ): Promise<{ prUrl: string; prNumber: number }> {
   const title = `feat: #${issue.number} — ${issue.title}`;
 
@@ -24,7 +25,7 @@ export async function createPullRequest(
     title,
     "--body",
     body,
-  ]);
+  ], { cwd });
 
   // Extract PR URL
   const output = result.stdout.trim() || result.stderr.trim();
@@ -40,7 +41,7 @@ export async function createPullRequest(
 
 export async function mergePullRequest(
   prUrl: string,
-  _config: AutoDevConfig,
+  cwd: string,
 ): Promise<void> {
   await execa("gh", [
     "pr",
@@ -48,5 +49,5 @@ export async function mergePullRequest(
     prUrl,
     "--squash",
     "--delete-branch",
-  ]);
+  ], { cwd });
 }
