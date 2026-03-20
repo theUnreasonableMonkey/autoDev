@@ -47,15 +47,18 @@ export async function createPullRequest(
   const url = urlMatch ? urlMatch[0] : prUrl;
 
   // Auto-merge the PR and delete the branch
-  await execa("gh", [
-    "pr",
-    "merge",
-    url,
-    "--repo",
-    config.repo,
-    "--squash",
-    "--delete-branch",
-  ]);
+  try {
+    await execa("gh", [
+      "pr",
+      "merge",
+      url,
+      "--squash",
+      "--delete-branch",
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`  Warning: Auto-merge failed (${msg.slice(0, 80)}). PR is open for manual merge.`);
+  }
 
   return url;
 }

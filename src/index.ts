@@ -20,7 +20,8 @@ program
   .option("-c, --config <path>", "Path to config file", "autodev.config.yaml")
   .option("--resume", "Resume from last saved state")
   .option("--dry-run", "Fetch and display issues without processing them")
-  .action(async (options: { config: string; resume?: boolean; dryRun?: boolean }) => {
+  .option("--verbose", "Show extra detail during execution")
+  .action(async (options: { config: string; resume?: boolean; dryRun?: boolean; verbose?: boolean }) => {
     try {
       const { config, repoDir } = loadConfig(options.config);
       console.log(`Loaded config for repo: ${config.repo}`);
@@ -60,6 +61,7 @@ program
         secrets,
         logger,
         repoDir,
+        verbose: options.verbose,
         resume: options.resume,
       });
     } catch (err) {
