@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { loadConfig, loadSecrets } from "./config/loader.js";
+import { loadConfig, loadSecrets, configExists } from "./config/loader.js";
+import { runSetup } from "./config/setup.js";
 import { fetchIssues } from "./github/issues.js";
 import { hasSnapshot, loadSnapshot, clearSnapshot } from "./machine/persistence.js";
 import { runOrchestrator } from "./orchestrator.js";
@@ -23,7 +24,15 @@ program
   .option("--verbose", "Show extra detail during execution")
   .action(async (options: { config: string; resume?: boolean; dryRun?: boolean; verbose?: boolean }) => {
     try {
-      const { config, repoDir } = loadConfig(options.config);
+      let configPath = options.config;
+
+      // If config doesn't exist, run the setup wizard
+      if (!configExists(configPath)) {
+        console.log(`No config file found at: ${configPath}`);
+        configPath = await runSetup(configPath);
+      }
+
+      const { config, repoDir } = loadConfig(configPath);
       console.log(`Loaded config for repo: ${config.repo}`);
       console.log(`Target directory: ${repoDir}`);
 
@@ -64,6 +73,20 @@ program
         verbose: options.verbose,
         resume: options.resume,
       });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Error: ${message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("setup")
+  .description("Create a config file for a target repo")
+  .option("-c, --config <path>", "Path to write config file", "autodev.config.yaml")
+  .action(async (options: { config: string }) => {
+    try {
+      await runSetup(options.config);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`Error: ${message}`);
