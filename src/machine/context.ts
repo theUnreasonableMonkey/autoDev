@@ -42,6 +42,8 @@ export interface WorkflowContext {
   // Current issue state
   branchName: string | null;
   sessionId: string | null;
+  prUrl: string | null;
+  prNumber: number | null;
   reviewIteration: number;
   reviewFindings: ReviewFinding[];
   questionCount: number;
@@ -86,6 +88,8 @@ export function createInitialContext(runId: string): WorkflowContext {
     currentIssue: null,
     branchName: null,
     sessionId: null,
+    prUrl: null,
+    prNumber: null,
     reviewIteration: 0,
     reviewFindings: [],
     questionCount: 0,
