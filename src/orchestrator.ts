@@ -125,7 +125,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       createPr: fromPromise(
         async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
           display.step("Creating pull request");
-          const { prUrl, prNumber } = await createPullRequest(input.issue, input.config);
+          const { prUrl, prNumber } = await createPullRequest(input.issue, input.config, repoDir);
           display.stepDone("PR created", `#${prNumber} — ${prUrl}`);
           return { prUrl, prNumber };
         },
@@ -204,7 +204,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
         async ({ input }: { input: { prUrl: string; config: AutoDevConfig } }) => {
           display.step("Merging PR");
           try {
-            await mergePullRequest(input.prUrl, input.config);
+            await mergePullRequest(input.prUrl, repoDir);
             display.stepDone("PR merged and branch deleted");
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
