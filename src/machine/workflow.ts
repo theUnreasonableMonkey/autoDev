@@ -8,7 +8,7 @@ import type {
 import { createInitialContext } from "./context.js";
 import type { AutoDevConfig } from "../config/schema.js";
 
-// Stub actors — replaced with real implementations in later phases
+// Stub actors — replaced with real implementations via .provide()
 const fetchIssuesActor = fromPromise(
   async (_: { input: { config: AutoDevConfig } }): Promise<GitHubIssue[]> => {
     throw new Error("fetchIssues not yet implemented");
@@ -31,17 +31,34 @@ const workOnIssueActor = fromPromise(
   },
 );
 
-const reviewCodeActor = fromPromise(
+const commitAndPushActor = fromPromise(
+  async (
+    _: { input: { issue: GitHubIssue; config: AutoDevConfig } },
+  ): Promise<void> => {
+    throw new Error("commitAndPush not yet implemented");
+  },
+);
+
+const createPrActor = fromPromise(
+  async (
+    _: { input: { issue: GitHubIssue; config: AutoDevConfig } },
+  ): Promise<{ prUrl: string; prNumber: number }> => {
+    throw new Error("createPr not yet implemented");
+  },
+);
+
+const reviewPrActor = fromPromise(
   async (
     _: {
       input: {
         issue: GitHubIssue;
         config: AutoDevConfig;
+        prNumber: number;
         previousFindings: ReviewResult["findings"];
       };
     },
   ): Promise<ReviewResult> => {
-    throw new Error("reviewCode not yet implemented");
+    throw new Error("reviewPr not yet implemented");
   },
 );
 
@@ -60,25 +77,11 @@ const fixIssuesActor = fromPromise(
   },
 );
 
-const commitAndPushActor = fromPromise(
+const mergePrActor = fromPromise(
   async (
-    _: { input: { issue: GitHubIssue; config: AutoDevConfig } },
+    _: { input: { prUrl: string; config: AutoDevConfig } },
   ): Promise<void> => {
-    throw new Error("commitAndPush not yet implemented");
-  },
-);
-
-const createPrActor = fromPromise(
-  async (
-    _: {
-      input: {
-        issue: GitHubIssue;
-        config: AutoDevConfig;
-        reviewFindings: ReviewResult["findings"];
-      };
-    },
-  ): Promise<{ prUrl: string }> => {
-    throw new Error("createPr not yet implemented");
+    throw new Error("mergePr not yet implemented");
   },
 );
 
@@ -92,10 +95,11 @@ export function createWorkflowMachine(config: AutoDevConfig) {
       fetchIssues: fetchIssuesActor,
       prepareIssue: prepareIssueActor,
       workOnIssue: workOnIssueActor,
-      reviewCode: reviewCodeActor,
-      fixIssues: fixIssuesActor,
       commitAndPush: commitAndPushActor,
       createPr: createPrActor,
+      reviewPr: reviewPrActor,
+      fixIssues: fixIssuesActor,
+      mergePr: mergePrActor,
     },
     guards: {
       hasMoreIssues: ({ context }) => {
@@ -125,6 +129,12 @@ export function createWorkflowMachine(config: AutoDevConfig) {
     id: "autodev",
     initial: "idle",
     context: createInitialContext(""),
+
+    // NEW FLOW:
+    // idle → fetchingQueue → preparingIssue → working → committing
+    // → creatingPr → reviewing (independent CLI) → [clean? → mergingPr]
+    // → [issues? → fixing → committing again → reviewing again]
+    // → advancingQueue → next issue or complete
 
     states: {
       idle: {
@@ -177,6 +187,8 @@ export function createWorkflowMachine(config: AutoDevConfig) {
               reviewFindings: [],
               questionCount: 0,
               sessionId: null,
+              prUrl: null,
+              prNumber: null,
             }),
           },
           onError: {
@@ -198,39 +210,90 @@ export function createWorkflowMachine(config: AutoDevConfig) {
             sessionId: context.sessionId,
           }),
           onDone: {
-            target: "reviewing",
+            target: "committing",
             actions: assign({
               sessionId: ({ event }) => event.output.sessionId,
             }),
           },
-          onError: [
+          onError: {
+            target: "rateLimited",
+            actions: assign({
+              lastError: ({ event }) =>
+                event.error instanceof Error ? event.error.message : String(event.error),
+            }),
+          },
+        },
+      },
+
+      committing: {
+        invoke: {
+          src: "commitAndPush",
+          input: ({ context }) => ({
+            issue: context.currentIssue!,
+            config,
+          }),
+          onDone: [
             {
-              target: "rateLimited",
-              actions: assign({
-                lastError: ({ event }) =>
-                  event.error instanceof Error ? event.error.message : String(event.error),
-              }),
+              // If we already have a PR (fix iteration), go straight to reviewing
+              guard: ({ context }) => context.prNumber !== null,
+              target: "reviewing",
+            },
+            {
+              // First time — create the PR
+              target: "creatingPr",
             },
           ],
+          onError: {
+            target: "escalating",
+            actions: assign({
+              lastError: ({ event }) =>
+                event.error instanceof Error ? event.error.message : String(event.error),
+            }),
+          },
+        },
+      },
+
+      creatingPr: {
+        invoke: {
+          src: "createPr",
+          input: ({ context }) => ({
+            issue: context.currentIssue!,
+            config,
+          }),
+          onDone: {
+            target: "reviewing",
+            actions: assign({
+              prUrl: ({ event }) => event.output.prUrl,
+              prNumber: ({ event }) => event.output.prNumber,
+            }),
+          },
+          onError: {
+            target: "escalating",
+            actions: assign({
+              lastError: ({ event }) =>
+                event.error instanceof Error ? event.error.message : String(event.error),
+            }),
+          },
         },
       },
 
       reviewing: {
         invoke: {
-          src: "reviewCode",
+          src: "reviewPr",
           input: ({ context }) => ({
             issue: context.currentIssue!,
             config,
+            prNumber: context.prNumber!,
             previousFindings: context.reviewFindings,
           }),
           onDone: [
             {
-              // Clean review — no P1/P2 findings
+              // Clean review — merge the PR
               guard: ({ event }) =>
                 !event.output.findings.some(
                   (f: { severity: string }) => f.severity === "P1" || f.severity === "P2",
                 ),
-              target: "committing",
+              target: "mergingPr",
               actions: assign({
                 reviewFindings: ({ event }) => event.output.findings,
                 reviewIteration: ({ context }) => context.reviewIteration + 1,
@@ -246,7 +309,7 @@ export function createWorkflowMachine(config: AutoDevConfig) {
               }),
             },
             {
-              // Max iterations reached — check for critical issues
+              // Max iterations, P1s remain — escalate
               guard: ({ event }) =>
                 event.output.findings.some(
                   (f: { severity: string }) => f.severity === "P1",
@@ -255,11 +318,12 @@ export function createWorkflowMachine(config: AutoDevConfig) {
               actions: assign({
                 reviewFindings: ({ event }) => event.output.findings,
                 reviewIteration: ({ context }) => context.reviewIteration + 1,
+                lastError: () => "Critical issues persist after max review iterations",
               }),
             },
             {
-              // Max iterations, no P1s — commit anyway (P2s only)
-              target: "committing",
+              // Max iterations, only P2s — merge anyway
+              target: "mergingPr",
               actions: assign({
                 reviewFindings: ({ event }) => event.output.findings,
                 reviewIteration: ({ context }) => context.reviewIteration + 1,
@@ -267,7 +331,8 @@ export function createWorkflowMachine(config: AutoDevConfig) {
             },
           ],
           onError: {
-            target: "rateLimited",
+            // Review failed — merge anyway (review is best-effort)
+            target: "mergingPr",
             actions: assign({
               lastError: ({ event }) =>
                 event.error instanceof Error ? event.error.message : String(event.error),
@@ -288,7 +353,8 @@ export function createWorkflowMachine(config: AutoDevConfig) {
             config,
           }),
           onDone: {
-            target: "reviewing",
+            // After fixing, commit the fixes and push (PR already exists)
+            target: "committing",
           },
           onError: {
             target: "rateLimited",
@@ -300,43 +366,22 @@ export function createWorkflowMachine(config: AutoDevConfig) {
         },
       },
 
-      committing: {
+      mergingPr: {
         invoke: {
-          src: "commitAndPush",
+          src: "mergePr",
           input: ({ context }) => ({
-            issue: context.currentIssue!,
+            prUrl: context.prUrl!,
             config,
-          }),
-          onDone: {
-            target: "creatingPr",
-          },
-          onError: {
-            target: "escalating",
-            actions: assign({
-              lastError: ({ event }) =>
-                event.error instanceof Error ? event.error.message : String(event.error),
-            }),
-          },
-        },
-      },
-
-      creatingPr: {
-        invoke: {
-          src: "createPr",
-          input: ({ context }) => ({
-            issue: context.currentIssue!,
-            config,
-            reviewFindings: context.reviewFindings,
           }),
           onDone: {
             target: "advancingQueue",
             actions: assign({
-              completedIssues: ({ context, event }) => [
+              completedIssues: ({ context }) => [
                 ...context.completedIssues,
                 {
                   number: context.currentIssue!.number,
                   title: context.currentIssue!.title,
-                  prUrl: event.output.prUrl,
+                  prUrl: context.prUrl!,
                   reviewIterations: context.reviewIteration,
                   questionsAsked: context.questionCount,
                 },
@@ -406,7 +451,6 @@ export function createWorkflowMachine(config: AutoDevConfig) {
           );
         },
         after: {
-          // Auto-skip after 10 seconds if no human responds (covers no-Telegram case)
           10000: {
             target: "skippingIssue",
             actions: assign({
@@ -416,7 +460,7 @@ export function createWorkflowMachine(config: AutoDevConfig) {
           },
         },
         on: {
-          HUMAN_PROCEED: { target: "committing" },
+          HUMAN_PROCEED: { target: "mergingPr" },
           HUMAN_SKIP: {
             target: "skippingIssue",
             actions: assign({
