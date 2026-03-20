@@ -58,7 +58,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
 
   // Question handler
   const questionHandler = new ThreeTierQuestionHandler(
-    bridge, secrets.anthropicApiKey, logger,
+    bridge, secrets.anthropicApiKey ?? "", logger,
     config.issues.max_questions_per_issue,
   );
 
