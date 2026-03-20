@@ -56,10 +56,12 @@ export async function commitAndPush(
   // Check if there are staged changes
   try {
     await git(["diff", "--cached", "--quiet"], cwd);
-    // No changes to commit
-    return;
-  } catch {
-    // There are changes — commit them
+    // No changes to commit — this is an error, implementation didn't produce code
+    throw new Error("No changes to commit — Claude did not produce any code changes");
+  } catch (err) {
+    // If it's our own error, re-throw it
+    if (err instanceof Error && err.message.includes("No changes to commit")) throw err;
+    // Otherwise, git diff --cached --quiet exits non-zero when there ARE changes — that's good
   }
 
   const fullMessage = `${message}\n\nCo-Authored-By: ${coAuthor}`;
