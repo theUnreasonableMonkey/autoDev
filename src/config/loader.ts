@@ -35,15 +35,12 @@ export function loadSecrets(): AppSecrets {
   };
 }
 
+export function configExists(configPath: string): boolean {
+  return existsSync(resolve(configPath));
+}
+
 export function loadConfig(configPath: string): LoadedConfig {
   const resolvedPath = resolve(configPath);
-
-  if (!existsSync(resolvedPath)) {
-    throw new Error(
-      `Config file not found: ${resolvedPath}\n` +
-        `Create one from the example: cp autodev.config.yaml your-config.yaml`,
-    );
-  }
 
   const repoDir = dirname(resolvedPath);
   const raw = readFileSync(resolvedPath, "utf-8");
