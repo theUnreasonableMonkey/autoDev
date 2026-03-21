@@ -31,14 +31,12 @@ export async function createPullRequest(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
 
-    // Handle "PR already exists" — find and reuse it
+    // Handle "PR already exists"
     if (errMsg.includes("already exists")) {
       const urlMatch = errMsg.match(/https:\/\/github\.com\/[^\s]+/);
       if (urlMatch) {
         return extractPrInfoFromUrl(urlMatch[0]);
       }
-
-      // Try to find the PR via gh CLI
       return await findExistingPr(config, cwd);
     }
 
@@ -50,13 +48,52 @@ export async function mergePullRequest(
   prUrl: string,
   cwd: string,
 ): Promise<void> {
-  await execa("gh", [
-    "pr",
-    "merge",
-    prUrl,
-    "--squash",
-    "--delete-branch",
-  ], { cwd });
+  // Wait a moment for GitHub to calculate mergeability
+  await sleep(3000);
+
+  // Retry merge up to 3 times with increasing delays
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      // Check if PR is already merged
+      const { stdout } = await execa("gh", [
+        "pr",
+        "view",
+        prUrl,
+        "--json",
+        "state",
+      ], { cwd });
+      const state = JSON.parse(stdout) as { state: string };
+      if (state.state === "MERGED") {
+        // Already merged (Claude may have done it during implementation)
+        return;
+      }
+      if (state.state === "CLOSED") {
+        throw new Error("PR was closed without merging");
+      }
+
+      await execa("gh", [
+        "pr",
+        "merge",
+        prUrl,
+        "--squash",
+        "--delete-branch",
+      ], { cwd });
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      // If already merged, that's fine
+      if (msg.includes("already been merged") || msg.includes("MERGED")) {
+        return;
+      }
+
+      if (attempt < 3) {
+        await sleep(5000 * attempt);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 function extractPrInfo(
@@ -101,4 +138,8 @@ async function findExistingPr(
   }
 
   throw new Error("PR already exists but could not find it");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
