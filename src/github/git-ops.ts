@@ -13,7 +13,8 @@ function git(args: string[], cwd: string) {
 }
 
 export async function pullMain(cwd: string): Promise<void> {
-  await git(["checkout", "main"], cwd);
+  // Force checkout to handle locked/dirty files from previous issue
+  await git(["checkout", "main", "--force"], cwd);
   await git(["pull", "origin", "main"], cwd);
 }
 
