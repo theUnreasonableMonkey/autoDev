@@ -74,10 +74,9 @@ describe("workflowMachine", () => {
     expect(states!["fetchingQueue"]).toBeDefined();
     expect(states!["preparingIssue"]).toBeDefined();
     expect(states!["working"]).toBeDefined();
-    expect(states!["reviewing"]).toBeDefined();
-    expect(states!["fixing"]).toBeDefined();
     expect(states!["committing"]).toBeDefined();
     expect(states!["creatingPr"]).toBeDefined();
+    expect(states!["mergingPr"]).toBeDefined();
     expect(states!["advancingQueue"]).toBeDefined();
     expect(states!["skippingIssue"]).toBeDefined();
     expect(states!["escalating"]).toBeDefined();
@@ -87,13 +86,11 @@ describe("workflowMachine", () => {
 
   it("escalating state responds to HUMAN_PROCEED", () => {
     const machine = createWorkflowMachine(testConfig);
-    // Verify the escalating state config has the expected transitions
     const escalating = machine.config.states!["escalating"];
     expect(escalating).toBeDefined();
     const on = escalating!.on as Record<string, unknown>;
     expect(on["HUMAN_PROCEED"]).toBeDefined();
     expect(on["HUMAN_SKIP"]).toBeDefined();
-    expect(on["ESCALATION_TIMEOUT"]).toBeDefined();
   });
 
   it("rateLimited state has a dynamic backoff delay", () => {

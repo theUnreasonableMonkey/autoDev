@@ -11,13 +11,10 @@ import {
   commitAndPush,
 } from "./github/git-ops.js";
 import { createPullRequest, mergePullRequest } from "./github/pr.js";
-import { runCliReview } from "./executors/cli-reviewer.js";
 import { ClaudeDevExecutor } from "./executors/claude-dev.js";
-import { ThreeTierQuestionHandler } from "./questions/handler.js";
-import { createBot, startBot, stopBot } from "./telegram/bot.js";
-import { TelegramBridge } from "./telegram/bridge.js";
 import * as display from "./utils/display.js";
-import type { GitHubIssue, ReviewResult } from "./machine/context.js";
+import type { GitHubIssue } from "./machine/context.js";
+import type { AutoDevConfig as Config } from "./config/schema.js";
 import type { Snapshot } from "xstate";
 import type { Logger } from "pino";
 
@@ -31,46 +28,19 @@ export interface OrchestratorOptions {
 }
 
 export async function runOrchestrator(options: OrchestratorOptions): Promise<void> {
-  const { config, secrets, logger, repoDir, verbose } = options;
+  const { config, repoDir } = options;
 
   display.banner();
   display.configLoaded(config.repo, repoDir, config.reviewer.type);
 
-  // Telegram setup (graceful failure)
-  let bot: ReturnType<typeof createBot> | null = null;
-  let bridge: TelegramBridge | null = null;
-  try {
-    if (!secrets.telegramBotToken) throw new Error("No bot token configured");
-    bot = createBot(secrets.telegramBotToken);
-    bridge = new TelegramBridge(
-      bot, config.telegram.chat_id,
-      config.telegram.escalation_timeout_minutes,
-      config.telegram.reminder_interval_minutes,
-    );
-    await startBot(bot);
-    display.telegramStatus(true);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    display.telegramStatus(false, msg);
-    bot = null;
-    bridge = null;
-  }
-
-  // Question handler
-  const questionHandler = new ThreeTierQuestionHandler(
-    bridge, secrets.anthropicApiKey ?? "", logger,
-    config.issues.max_questions_per_issue,
-  );
-
   // Dev executor
   const executor = new ClaudeDevExecutor(config, repoDir);
-  executor.setQuestionHandler(questionHandler);
 
-  // Track progress for display
+  // Track progress
   let totalIssues = 0;
   let currentIssueIdx = 0;
 
-  // Wire state machine with real actors
+  // Wire state machine
   const machine = createWorkflowMachine(config).provide({
     actors: {
       fetchIssues: fromPromise(async () => {
@@ -82,7 +52,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       }),
 
       prepareIssue: fromPromise(
-        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig; issueIndex: number } }) => {
+        async ({ input }: { input: { issue: GitHubIssue; config: Config; issueIndex: number } }) => {
           const { issue } = input;
           currentIssueIdx = input.issueIndex;
           display.issueStart(issue, currentIssueIdx, totalIssues);
@@ -101,7 +71,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
 
       workOnIssue: fromPromise(
         async ({ input }: {
-          input: { issue: GitHubIssue; config: AutoDevConfig; sessionId: string | null };
+          input: { issue: GitHubIssue; config: Config; sessionId: string | null };
         }) => {
           display.step("Claude is implementing the issue", "this may take a few minutes");
           const startTime = Date.now();
@@ -115,7 +85,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       ),
 
       commitAndPush: fromPromise(
-        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
+        async ({ input }: { input: { issue: GitHubIssue; config: Config } }) => {
           display.step("Committing and pushing changes");
           const message = `feat: implement #${input.issue.number} — ${input.issue.title}`;
           await commitAndPush(message, input.config.git.commit_co_author, repoDir);
@@ -124,7 +94,7 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       ),
 
       createPr: fromPromise(
-        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
+        async ({ input }: { input: { issue: GitHubIssue; config: Config } }) => {
           display.step("Creating pull request");
           const { prUrl, prNumber } = await createPullRequest(input.issue, input.config, repoDir);
           display.stepDone("PR created", `#${prNumber} — ${prUrl}`);
@@ -132,86 +102,11 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
         },
       ),
 
-      reviewPr: fromPromise(
-        async ({ input }: {
-          input: {
-            issue: GitHubIssue;
-            config: AutoDevConfig;
-            prNumber: number;
-            previousFindings: ReviewResult["findings"];
-          };
-        }) => {
-          const iteration = input.previousFindings.length > 0 ? 2 : 1;
-          display.step(
-            "Independent code review (separate Claude session)",
-            `iteration ${iteration}/${config.reviewer.max_iterations}`,
-          );
-
-          console.log();
-          console.log("  ┌─── Review Session Output ───────────────────────────────");
-
-          const result = await runCliReview(
-            repoDir,
-            input.config,
-            input.prNumber,
-            (text: string) => {
-              // Stream review output with indent
-              const lines = text.split("\n");
-              for (const line of lines) {
-                if (line.trim()) {
-                  process.stdout.write(`  │ ${line}\n`);
-                }
-              }
-            },
-          );
-
-          console.log("  └────────────────────────────────────────────────────────");
-          console.log();
-
-          display.reviewResult(result.findings, iteration, config.reviewer.max_iterations);
-          return result;
-        },
-      ),
-
-      fixIssues: fromPromise(
-        async ({ input }: {
-          input: {
-            issue: GitHubIssue;
-            findings: ReviewResult["findings"];
-            sessionId: string;
-            config: AutoDevConfig;
-          };
-        }) => {
-          const p1p2 = input.findings.filter(
-            (f) => f.severity === "P1" || f.severity === "P2",
-          );
-          display.step("Claude is fixing review findings", `${p1p2.length} issue(s)`);
-          const findingsText = p1p2
-            .map((f) => `[${f.severity}] ${f.file}: ${f.description}`)
-            .join("\n");
-          await executor.execute({
-            issue: {
-              ...input.issue,
-              body: `Fix these review findings:\n${findingsText}\n\nComplete the P1 and P2 fixes and triage any remaining issues.`,
-            },
-            config: input.config,
-            sessionId: input.sessionId,
-          });
-          display.stepDone("Fixes applied");
-        },
-      ),
-
       mergePr: fromPromise(
-        async ({ input }: { input: { prUrl: string; config: AutoDevConfig } }) => {
+        async ({ input }: { input: { prUrl: string; config: Config } }) => {
           display.step("Merging PR");
-          try {
-            await mergePullRequest(input.prUrl, repoDir);
-            display.stepDone("PR merged and branch deleted");
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            display.stepError("Merge failed", msg.slice(0, 80));
-            throw err;
-          }
+          await mergePullRequest(input.prUrl, repoDir);
+          display.stepDone("PR merged and branch deleted");
         },
       ),
     },
@@ -232,14 +127,13 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     actor = createActor(machine);
   }
 
-  // Persist + track display state
+  // Persist + display
   actor.subscribe((snapshot) => {
     persistSnapshot(snapshot as unknown as Snapshot<unknown>);
     const ctx = snapshot.context;
     if (ctx.currentIssueIndex !== currentIssueIdx) {
       currentIssueIdx = ctx.currentIssueIndex;
     }
-
     if (snapshot.value === "advancingQueue" && ctx.completedIssues.length > 0) {
       const last = ctx.completedIssues[ctx.completedIssues.length - 1];
       if (last) display.issueComplete(last.number, last.prUrl);
@@ -251,9 +145,6 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     if (snapshot.value === "rateLimited") {
       display.rateLimited(30000);
     }
-    if (verbose) {
-      logger.debug({ state: snapshot.value }, "State transition");
-    }
   });
 
   // Graceful shutdown
@@ -261,8 +152,6 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
     console.log("\nShutdown requested. Saving state...");
     const persisted = actor.getPersistedSnapshot();
     persistSnapshot(persisted as unknown as Snapshot<unknown>);
-    if (bridge) bridge.cleanup();
-    if (bot) stopBot(bot);
     console.log("State saved. Run with --resume to continue.");
     process.exit(0);
   };
@@ -278,11 +167,6 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       if (snapshot.status === "done") {
         const ctx = snapshot.context;
         display.runSummary(ctx.completedIssues, ctx.skippedIssues, Date.now() - ctx.startedAt);
-        if (bridge) {
-          bridge.notify(`AutoDev complete: ${ctx.completedIssues.length} done, ${ctx.skippedIssues.length} skipped`).catch(() => {});
-          bridge.cleanup();
-        }
-        if (bot) stopBot(bot);
         resolve();
       }
     });
