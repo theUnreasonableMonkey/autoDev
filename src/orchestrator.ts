@@ -86,10 +86,10 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
           const { issue } = input;
           currentIssueIdx = input.issueIndex;
           display.issueStart(issue, currentIssueIdx, totalIssues);
-          display.step("Pulling latest main");
-          await pullMain(repoDir);
           display.step("Checking working directory");
           await verifyCleanWorkDir(repoDir);
+          display.step("Pulling latest main");
+          await pullMain(repoDir);
           display.step("Creating feature branch");
           const branchName = await createBranch(
             config.git.branch_prefix, issue.number, issue.title, repoDir,

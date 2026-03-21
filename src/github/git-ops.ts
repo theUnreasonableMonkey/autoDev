@@ -42,7 +42,8 @@ export async function createBranch(
 export async function verifyCleanWorkDir(cwd: string): Promise<void> {
   const { stdout } = await git(["status", "--porcelain"], cwd);
   if (stdout.trim().length > 0) {
-    await git(["stash", "push", "-m", "autodev: stashed dirty working directory"], cwd);
+    // Stash everything including untracked files
+    await git(["stash", "push", "--include-untracked", "-m", "autodev: stashed dirty working directory"], cwd);
   }
 }
 
