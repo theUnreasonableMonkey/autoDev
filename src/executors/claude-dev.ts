@@ -9,7 +9,7 @@ export class ClaudeDevExecutor implements DevExecutor {
   }
 
   setQuestionHandler(_handler: unknown): void {
-    // Question handling is built into Claude Code CLI via --dangerously-skip-permissions
+    // Not used in CLI mode
   }
 
   async execute(input: TaskInput): Promise<TaskOutput> {
@@ -30,7 +30,6 @@ export class ClaudeDevExecutor implements DevExecutor {
         stdin: "ignore",
         env: {
           ...process.env,
-          // Remove API key so CLI uses OAuth (Max Pro subscription) instead
           ANTHROPIC_API_KEY: undefined,
         },
       },
@@ -40,7 +39,6 @@ export class ClaudeDevExecutor implements DevExecutor {
     if (child.stdout) {
       child.stdout.on("data", (chunk: Buffer) => {
         const text = chunk.toString();
-        // Indent and prefix each line for visual clarity
         for (const line of text.split("\n")) {
           if (line.trim()) {
             process.stdout.write(`     ${line}\n`);
@@ -67,26 +65,31 @@ export class ClaudeDevExecutor implements DevExecutor {
       throw new Error(`Claude CLI exited with code ${result.exitCode}: ${errMsg}`);
     }
 
-    // Session ID not available in CLI mode — use a placeholder
     return { sessionId: `cli-${Date.now()}` };
   }
 
   private buildPrompt(input: TaskInput): string {
     const { issue } = input;
     return [
-      `You are working in the repository at ${this.repoDir}.`,
+      "IMPORTANT: You are an automated coding agent. Do NOT ask questions. Do NOT wait for input. Just implement the code.",
+      "",
       `Implement GitHub issue #${issue.number}: ${issue.title}`,
       "",
-      "## Issue Description",
-      issue.body,
+      "Issue description:",
+      issue.body || "(No description provided — implement based on the title)",
       "",
-      "## Instructions",
-      "- Read existing code and understand the project structure before making changes",
-      "- Implement the changes described in the issue completely",
-      "- Follow existing code patterns and conventions",
-      "- Write tests for new functionality if a test framework is set up",
-      "- Make sure the code compiles/runs without errors",
-      "- Do NOT commit or push — just write the code",
+      "Requirements:",
+      "1. Read the existing codebase first to understand the project structure, patterns, and conventions.",
+      "2. Write ALL the code needed to implement this issue. Create new files, modify existing files — whatever is needed.",
+      "3. If the project has no code yet, scaffold the necessary project structure (package.json, source files, etc).",
+      "4. Make sure the code is complete and functional — not stubs or placeholders.",
+      "5. If a test framework exists, write tests. If not, skip tests.",
+      "",
+      "CRITICAL RULES:",
+      "- Do NOT run git commit, git push, or create pull requests. AutoDev handles git operations.",
+      "- Do NOT ask the user any questions. Make reasonable decisions and proceed.",
+      "- Do NOT just describe what you would do — actually write the code using the Write and Edit tools.",
+      "- If you encounter ambiguity, make the simplest reasonable choice and implement it.",
     ].join("\n");
   }
 }
