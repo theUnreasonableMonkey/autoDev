@@ -7,8 +7,13 @@ export async function createPullRequest(
   config: AutoDevConfig,
   cwd: string,
 ): Promise<{ prUrl: string; prNumber: number }> {
-  const title = `feat: #${issue.number} — ${issue.title}`;
+  // Check if a PR already exists for the current branch (Claude may have created one)
+  const existing = await findExistingPrForCurrentBranch(config, cwd);
+  if (existing) {
+    return existing;
+  }
 
+  const title = `feat: #${issue.number} — ${issue.title}`;
   const body = config.git.pr_template
     .replace("{summary}", `Implements issue #${issue.number}: ${issue.title}`)
     .replace("{issue_number}", String(issue.number));
@@ -37,7 +42,6 @@ export async function createPullRequest(
       if (urlMatch) {
         return extractPrInfoFromUrl(urlMatch[0]);
       }
-      return await findExistingPr(config, cwd);
     }
 
     throw err;
@@ -48,45 +52,26 @@ export async function mergePullRequest(
   prUrl: string,
   cwd: string,
 ): Promise<void> {
-  // Wait a moment for GitHub to calculate mergeability
   await sleep(3000);
 
-  // Retry merge up to 3 times with increasing delays
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       // Check if PR is already merged
       const { stdout } = await execa("gh", [
-        "pr",
-        "view",
-        prUrl,
-        "--json",
-        "state",
+        "pr", "view", prUrl, "--json", "state",
       ], { cwd });
       const state = JSON.parse(stdout) as { state: string };
-      if (state.state === "MERGED") {
-        // Already merged (Claude may have done it during implementation)
-        return;
-      }
-      if (state.state === "CLOSED") {
-        throw new Error("PR was closed without merging");
-      }
+
+      if (state.state === "MERGED") return;
+      if (state.state === "CLOSED") throw new Error("PR was closed without merging");
 
       await execa("gh", [
-        "pr",
-        "merge",
-        prUrl,
-        "--squash",
-        "--delete-branch",
+        "pr", "merge", prUrl, "--squash", "--delete-branch",
       ], { cwd });
       return;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-
-      // If already merged, that's fine
-      if (msg.includes("already been merged") || msg.includes("MERGED")) {
-        return;
-      }
-
+      if (msg.includes("already been merged") || msg.includes("MERGED")) return;
       if (attempt < 3) {
         await sleep(5000 * attempt);
         continue;
@@ -94,6 +79,30 @@ export async function mergePullRequest(
       throw err;
     }
   }
+}
+
+async function findExistingPrForCurrentBranch(
+  config: AutoDevConfig,
+  cwd: string,
+): Promise<{ prUrl: string; prNumber: number } | null> {
+  try {
+    const { stdout } = await execa("gh", [
+      "pr", "list",
+      "--repo", config.repo,
+      "--head", "HEAD",
+      "--state", "all",
+      "--json", "number,url,state",
+      "--limit", "1",
+    ], { cwd });
+
+    const prs = JSON.parse(stdout) as Array<{ number: number; url: string; state: string }>;
+    if (prs.length > 0 && prs[0]) {
+      return { prUrl: prs[0].url, prNumber: prs[0].number };
+    }
+  } catch {
+    // No existing PR found
+  }
+  return null;
 }
 
 function extractPrInfo(
@@ -113,31 +122,6 @@ function extractPrInfoFromUrl(url: string): { prUrl: string; prNumber: number } 
   const numberMatch = url.match(/\/pull\/(\d+)/);
   const prNumber = numberMatch?.[1] ? parseInt(numberMatch[1], 10) : 0;
   return { prUrl: url, prNumber };
-}
-
-async function findExistingPr(
-  config: AutoDevConfig,
-  cwd: string,
-): Promise<{ prUrl: string; prNumber: number }> {
-  const { stdout } = await execa("gh", [
-    "pr",
-    "list",
-    "--repo",
-    config.repo,
-    "--head",
-    "HEAD",
-    "--json",
-    "number,url",
-    "--limit",
-    "1",
-  ], { cwd });
-
-  const prs = JSON.parse(stdout) as Array<{ number: number; url: string }>;
-  if (prs.length > 0 && prs[0]) {
-    return { prUrl: prs[0].url, prNumber: prs[0].number };
-  }
-
-  throw new Error("PR already exists but could not find it");
 }
 
 function sleep(ms: number): Promise<void> {
