@@ -58,7 +58,7 @@ export async function runCliReview(
   let resultText = "";
 
   try {
-    const child = execa("claude", ["-p", "--output-format", "text", prompt], {
+    const child = execa("claude", ["-p", "--dangerously-skip-permissions", "--output-format", "text", prompt], {
       cwd: repoDir,
       stdin: "ignore",
       env: {

@@ -17,7 +17,7 @@ const fetchIssuesActor = fromPromise(
 
 const prepareIssueActor = fromPromise(
   async (
-    _: { input: { issue: GitHubIssue; config: AutoDevConfig } },
+    _: { input: { issue: GitHubIssue; config: AutoDevConfig; issueIndex: number } },
   ): Promise<{ branchName: string }> => {
     throw new Error("prepareIssue not yet implemented");
   },
@@ -178,6 +178,7 @@ export function createWorkflowMachine(config: AutoDevConfig) {
           input: ({ context }) => ({
             issue: context.currentIssue!,
             config,
+            issueIndex: context.currentIssueIndex,
           }),
           onDone: {
             target: "working",

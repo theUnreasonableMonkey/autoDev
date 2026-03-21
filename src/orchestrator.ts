@@ -82,8 +82,9 @@ export async function runOrchestrator(options: OrchestratorOptions): Promise<voi
       }),
 
       prepareIssue: fromPromise(
-        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig } }) => {
+        async ({ input }: { input: { issue: GitHubIssue; config: AutoDevConfig; issueIndex: number } }) => {
           const { issue } = input;
+          currentIssueIdx = input.issueIndex;
           display.issueStart(issue, currentIssueIdx, totalIssues);
           display.step("Pulling latest main");
           await pullMain(repoDir);
