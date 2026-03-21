@@ -27,6 +27,7 @@ export class ClaudeDevExecutor implements DevExecutor {
         cwd: this.repoDir,
         timeout: 600_000, // 10 minute timeout per issue
         reject: false,
+        stdin: "ignore",
         env: {
           ...process.env,
           // Remove API key so CLI uses OAuth (Max Pro subscription) instead
