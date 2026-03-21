@@ -60,10 +60,10 @@ export async function runCliReview(
   try {
     const child = execa("claude", ["-p", "--output-format", "text", prompt], {
       cwd: repoDir,
+      stdin: "ignore",
       env: {
         ...process.env,
         CLAUDE_AUTO_ACCEPT: "true",
-        // Remove API key so CLI uses OAuth (Max Pro subscription) instead
         ANTHROPIC_API_KEY: undefined,
       },
       reject: false,
